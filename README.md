@@ -304,14 +304,5 @@ npm run test:coverage    # With coverage report
 
 ---
 
-## Commit Convention
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-feat: add matching engine with greedy best-first algorithm
-fix: handle 2024-03-12T truncated timestamp as malformed
-chore: add winston daily-rotate-file transport
-test: add api integration tests with mocked service layer
-docs: document key design decisions in README
 ```

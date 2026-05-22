@@ -1,5 +1,22 @@
 'use strict';
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * Reconciliation Controller
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *
+ * HTTP request handlers for the reconciliation API.
+ * Responsibilities:
+ *   - Input validation and sanitization
+ *   - Delegating business logic to service layer
+ *   - Formatting HTTP responses (JSON or CSV)
+ *
+ * This layer is intentionally thin — it validates input, calls services,
+ * and formats output. No business logic lives here.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════
+ */
+
 const { runReconciliation, runWithSampleData } = require('../services/reconciliationService');
 const { getReport, getSummary, getUnmatched } = require('../services/reportService');
 const { entriesToCSV } = require('../utils/csvExporter');
@@ -9,19 +26,18 @@ const logger = require('../utils/logger');
 /* ── POST /reconcile ─────────────────────────────────────────────────────── */
 
 /**
- * Accepts optional JSON body:
- * {
- *   "timestampToleranceSeconds": 300,   // override
- *   "quantityTolerancePct": 0.01,       // override
- *   "useSampleData": true               // use bundled sample CSVs (demo mode)
- * }
+ * Triggers a new reconciliation run.
  *
- * For real usage, POST multipart/form-data with files:
- *   - userCsv
- *   - exchangeCsv
+ * Accepts either:
+ *   - { useSampleData: true } to use bundled sample CSVs (demo mode)
+ *   - { userCsv: "...", exchangeCsv: "..." } with raw CSV content
  *
- * For simplicity (no file-upload middleware added), the body can also contain
- * raw CSV strings under keys "userCsv" and "exchangeCsv".
+ * Optional tolerance overrides:
+ *   - timestampToleranceSeconds: number (must be ≥ 0)
+ *   - quantityTolerancePct: number (must be ≥ 0)
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
  */
 async function triggerReconciliation(req, res) {
   const {
@@ -32,43 +48,43 @@ async function triggerReconciliation(req, res) {
     exchangeCsv,
   } = req.body || {};
 
-  /* Build tolerance override object (only include if provided) */
+  // ── Validate tolerance overrides ─────────────────────────────────────────
   const toleranceOverrides = {};
+
   if (timestampToleranceSeconds !== undefined) {
-    const v = parseFloat(timestampToleranceSeconds);
-    if (isNaN(v) || v < 0) {
+    const parsed = parseFloat(timestampToleranceSeconds);
+    if (isNaN(parsed) || parsed < 0) {
       throw ApiError.badRequest('timestampToleranceSeconds must be a non-negative number');
     }
-    toleranceOverrides.timestampToleranceSeconds = v;
-  }
-  if (quantityTolerancePct !== undefined) {
-    const v = parseFloat(quantityTolerancePct);
-    if (isNaN(v) || v < 0) {
-      throw ApiError.badRequest('quantityTolerancePct must be a non-negative number');
-    }
-    toleranceOverrides.quantityTolerancePct = v;
+    toleranceOverrides.timestampToleranceSeconds = parsed;
   }
 
+  if (quantityTolerancePct !== undefined) {
+    const parsed = parseFloat(quantityTolerancePct);
+    if (isNaN(parsed) || parsed < 0) {
+      throw ApiError.badRequest('quantityTolerancePct must be a non-negative number');
+    }
+    toleranceOverrides.quantityTolerancePct = parsed;
+  }
+
+  // ── Execute reconciliation ───────────────────────────────────────────────
   let result;
 
   if (useSampleData) {
-    logger.info('Running reconciliation with bundled sample data');
+    logger.info('Reconciliation triggered with bundled sample data');
     result = await runWithSampleData(toleranceOverrides);
   } else {
-    /* Expect inline CSV strings in the request body */
+    // Validate that CSV content was provided
     if (!userCsv || !exchangeCsv) {
       throw ApiError.badRequest(
         'Provide "userCsv" and "exchangeCsv" strings in the request body, ' +
         'or set "useSampleData": true to use the bundled sample files.',
       );
     }
-    result = await runReconciliation({
-      userCsv,
-      exchangeCsv,
-      toleranceOverrides,
-    });
+    result = await runReconciliation({ userCsv, exchangeCsv, toleranceOverrides });
   }
 
+  // ── Return 202 Accepted (processing complete, report available) ──────────
   return res.status(202).json({
     success: true,
     message: 'Reconciliation completed',
@@ -81,6 +97,16 @@ async function triggerReconciliation(req, res) {
 
 /* ── GET /report/:runId ──────────────────────────────────────────────────── */
 
+/**
+ * Retrieves the full reconciliation report for a run.
+ * Supports pagination, category filtering, and CSV export.
+ *
+ * Query Parameters:
+ *   - page (default: 1)
+ *   - limit (default: 100)
+ *   - category: matched | conflicting | unmatched_user | unmatched_exchange
+ *   - format: json (default) | csv
+ */
 async function fetchReport(req, res) {
   const { runId } = req.params;
   const { category, page, limit, format } = req.query;
@@ -91,12 +117,12 @@ async function fetchReport(req, res) {
     limit: limit ? parseInt(limit, 10) : 100,
   });
 
-  /* CSV export mode */
+  // CSV export mode — returns downloadable file
   if (format === 'csv') {
-    const csv = entriesToCSV(data.entries);
+    const csvContent = entriesToCSV(data.entries);
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="report-${runId}.csv"`);
-    return res.send(csv);
+    return res.send(csvContent);
   }
 
   return res.json({ success: true, data });
@@ -104,6 +130,10 @@ async function fetchReport(req, res) {
 
 /* ── GET /report/:runId/summary ──────────────────────────────────────────── */
 
+/**
+ * Retrieves summary counts and metadata for a reconciliation run.
+ * Lightweight endpoint — no report entries returned.
+ */
 async function fetchSummary(req, res) {
   const { runId } = req.params;
   const data = await getSummary(runId);
@@ -112,6 +142,15 @@ async function fetchSummary(req, res) {
 
 /* ── GET /report/:runId/unmatched ────────────────────────────────────────── */
 
+/**
+ * Retrieves only unmatched entries with reasons.
+ * Supports pagination and CSV export.
+ *
+ * Query Parameters:
+ *   - page (default: 1)
+ *   - limit (default: 100)
+ *   - format: json (default) | csv
+ */
 async function fetchUnmatched(req, res) {
   const { runId } = req.params;
   const { page, limit, format } = req.query;
@@ -122,10 +161,10 @@ async function fetchUnmatched(req, res) {
   });
 
   if (format === 'csv') {
-    const csv = entriesToCSV(data.entries);
+    const csvContent = entriesToCSV(data.entries);
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="unmatched-${runId}.csv"`);
-    return res.send(csv);
+    return res.send(csvContent);
   }
 
   return res.json({ success: true, data });
