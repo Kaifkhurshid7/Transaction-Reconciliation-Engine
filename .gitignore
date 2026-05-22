@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment variables (contains secrets)
+.env
+
+# Application logs (generated at runtime)
+logs/
+
+# Test coverage reports
+coverage/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Runtime artifacts
+*.log
+*.pid
