@@ -9,8 +9,8 @@
     "dev": "nodemon src/server.js",
     "test": "jest --runInBand --forceExit --detectOpenHandles",
     "test:coverage": "jest --coverage --runInBand --forceExit --detectOpenHandles",
-    "lint": "eslint 'src/**/*.js' 'tests/**/*.js'",
-    "lint:fix": "eslint 'src/**/*.js' 'tests/**/*.js' --fix",
+    "lint": "eslint src/**/*.js tests/**/*.js",
+    "lint:fix": "eslint src/**/*.js tests/**/*.js --fix",
     "validate": "npm run lint && npm test"
   },
   "dependencies": {
